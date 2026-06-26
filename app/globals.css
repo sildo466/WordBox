@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Dark console foundation ── */
+
+:root {
+  color-scheme: dark;
+  --surface-0: #020617;
+  --surface-1: #0f172a;
+  --surface-2: #1e293b;
+  --border: #334155;
+  --accent: #22d3ee;
+}
+
+body {
+  margin: 0;
+  background-color: var(--surface-0);
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #475569 #0f172a;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* ── Utility ── */
+
+@layer utilities {
+  .console-panel {
+    background-color: rgba(15, 23, 42, 0.6);
+    border: 1px solid #1e293b;
+    backdrop-filter: blur(8px);
+  }
+
+  .accent-glow {
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.15);
+  }
+}
+
+/* ── Transitions ── */
+
+@layer base {
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  [role="button"] {
+    transition: color 120ms ease, background-color 120ms ease,
+                border-color 120ms ease, box-shadow 180ms ease,
+                opacity 120ms ease;
+  }
+}
