@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server'
 import { generateWorldFromPrompt } from '@/services/llm/world-gen'
 import {
   createAgentsFromCharacterSpecs,
-  generateFillerAgents,
 } from '@/services/llm/agent-gen'
 import { generateWorldBuilderData } from '@/services/llm/world-builder'
 import { createLLMClient, getModel, callLLM } from '@/services/llm/client'
 import type { WorldSnapshot } from '@/core/world'
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 import { snapshotToWorldState } from '@/core/world'
 import { saveWorldSnapshot } from '@/services/persistence'
 
@@ -147,34 +150,25 @@ export async function POST(request: Request) {
       world.agents.npcs = []
     }
 
-    // Step 3: Optionally generate filler agents
+    // Step 3: Optionally generate filler agents from suggested CharacterSpecs
+    // 使用 createAgentsFromCharacterSpecs 而非 generateFillerAgents，确保 agent ID 与 CharacterSpec ID 匹配
     if (!suppressExtraCharacters && suggestedCharacters.length > 0) {
-      const existingForFiller = world.agents.npcs.map(a => ({
-        name: a.name,
-        id: a.id,
-        occupation: a.occupation,
-      }))
-
-      const existingNames = existingForFiller.map(e => e.name)
+      const existingNames = world.agents.npcs.map(a => a.name.toLowerCase())
 
       // Only add suggested characters that don't duplicate existing ones
       const uniqueSuggested = suggestedCharacters.filter(
-        s => !existingNames.some(
-          n => n.toLowerCase() === s.name.toLowerCase()
-        )
+        s => !existingNames.some(n => n === s.name.toLowerCase())
       )
 
       if (uniqueSuggested.length > 0) {
         console.log(`3. Generating ${uniqueSuggested.length} filler/background agents...`)
 
         try {
-          const fillerAgents = await generateFillerAgents({
-            count: uniqueSuggested.length,
+          const fillerAgents = await createAgentsFromCharacterSpecs(
+            uniqueSuggested,
             worldContext,
-            existingCharacters: existingForFiller,
-            existingFactions: allFactionNames,
-            language,
-          })
+            allFactionNames
+          )
 
           world.agents.npcs = [...world.agents.npcs, ...fillerAgents]
           totalAgents = world.agents.npcs.length
@@ -257,7 +251,145 @@ export async function POST(request: Request) {
           })
         }
       }
+
+      // Fallback: 如果 agent 没有生成 bonds，但 CharacterSpec 有用户定义的关系，直接转换
+      const charSpec = extractedCharacters.find(c => c.id === char.id || c.name === char.name)
+      const userRels = charSpec?.relationships
+      if (userRels && Object.keys(userRels).length > 0) {
+        if (!Array.isArray(char.relations)) char.relations = []
+        const existingIds = new Set(char.relations.map((r: any) => r.character_id))
+        for (const [targetName, relDescRaw] of Object.entries(userRels)) {
+          const relDesc = String(relDescRaw)
+          // 找到目标角色的 ID
+          const targetChar = world.characters.find((c: any) =>
+            c.name === targetName || c.id === targetName
+          ) as any
+          if (!targetChar || existingIds.has(targetChar.id)) continue
+          const isEnemy = /敌|仇|恨|宿敌|rival|enemy|hostile/i.test(relDesc)
+          const isFamily = /父|母|兄弟|姐妹|子女|血亲|family|brother|sister|son|daughter/i.test(relDesc)
+          const isLover = /爱|恋|妻|夫|情人|lover|spouse|wife|husband/i.test(relDesc)
+          const isAlly = /友|盟|信任|伙伴|friend|ally|loyal/i.test(relDesc)
+          const type = isEnemy ? 'enemy' : isFamily ? 'family' : isLover ? 'lover' : isAlly ? 'ally' : 'neutral'
+          char.relations.push({
+            character_id: targetChar.id,
+            type,
+            strength: isEnemy || isFamily || isLover ? 0.8 : 0.5,
+            notes: relDesc,
+          })
+          existingIds.add(targetChar.id)
+        }
+      }
     }
+
+    // Step 4.5b: 如果所有角色关系仍为空，从 worldPrompt 文本中直接提取关系
+    const allRelsEmpty = (world.characters as any[]).every(c => !Array.isArray(c.relations) || c.relations.length === 0)
+    if (allRelsEmpty && world.characters.length >= 2) {
+      const charNames = (world.characters as any[]).map(c => c.name).filter(Boolean)
+      const charByName = new Map((world.characters as any[]).map(c => [c.name, c]))
+
+      // 扫描 worldPrompt 中的角色名对，用关键词推断关系
+      for (let i = 0; i < charNames.length; i++) {
+        for (let j = i + 1; j < charNames.length; j++) {
+          const a = charNames[i], b = charNames[j]
+          // 检查 prompt 中是否同时提到两个名字
+          const namePattern = new RegExp(`${escapeRegex(a)}[\\s\\S]{0,30}?${escapeRegex(b)}|${escapeRegex(b)}[\\s\\S]{0,30}?${escapeRegex(a)}`)
+          if (!namePattern.test(worldPrompt)) continue
+
+          // 在两个名字之间的文本中查找关系关键词
+          const match = worldPrompt.match(namePattern)
+          if (!match) continue
+          const between = match[0]
+
+          const isEnemy = /敌|仇|恨|宿敌|对抗|rival|enemy|at war/i.test(between)
+          const isAlly = /盟|友|伙伴|合作|ally|friend|partner/i.test(between)
+          const isFamily = /父|母|兄弟|姐妹|子女|family|brother|sister/i.test(between)
+          const isLover = /爱|恋|妻|夫|lover|spouse|wife|husband/i.test(between)
+
+          let type = 'neutral', strength = 0.3
+          if (isEnemy) { type = 'enemy'; strength = 0.8 }
+          else if (isFamily) { type = 'family'; strength = 0.8 }
+          else if (isLover) { type = 'lover'; strength = 0.8 }
+          else if (isAlly) { type = 'ally'; strength = 0.6 }
+
+          const charA = charByName.get(a)
+          const charB = charByName.get(b)
+          if (!charA || !charB) continue
+
+          if (!Array.isArray(charA.relations)) charA.relations = []
+          if (!Array.isArray(charB.relations)) charB.relations = []
+          if (!charA.relations.some((r: any) => r.character_id === charB.id)) {
+            charA.relations.push({ character_id: charB.id, type, strength, notes: `从世界描述推断` })
+          }
+          if (!charB.relations.some((r: any) => r.character_id === charA.id)) {
+            charB.relations.push({ character_id: charA.id, type, strength, notes: `从世界描述推断` })
+          }
+        }
+      }
+      const relCount = (world.characters as any[]).reduce((s, c) => s + (c.relations?.length ?? 0), 0)
+      if (relCount > 0) console.log(`  ✓ 从文本推断 ${relCount} 条角色关系`)
+    }
+
+    // Step 4.6: Infer organization relations from character relations
+    // Build character→faction mapping
+    const charToFaction = new Map<string, string>()
+    for (const char of world.characters as any[]) {
+      if (char.organization_id || char.faction_id) {
+        charToFaction.set(char.id, char.organization_id || char.faction_id)
+      }
+    }
+
+    // Aggregate cross-faction affinity from character relations
+    const crossFactionAffinity = new Map<string, { total: number; count: number }>()
+    for (const char of world.characters as any[]) {
+      if (!Array.isArray(char.relations)) continue
+      const fromFaction = charToFaction.get(char.id)
+      if (!fromFaction) continue
+      for (const rel of char.relations) {
+        const toFaction = charToFaction.get(rel.character_id)
+        if (!toFaction || fromFaction === toFaction) continue
+        const key = [fromFaction, toFaction].sort().join('→')
+        const existing = crossFactionAffinity.get(key) ?? { total: 0, count: 0 }
+        const affinity = rel.type === 'enemy' ? -rel.strength :
+                         rel.type === 'friend' || rel.type === 'ally' ? rel.strength : 0
+        existing.total += affinity
+        existing.count += 1
+        crossFactionAffinity.set(key, existing)
+      }
+    }
+
+    // Write inferred relations to factions and organizations
+    crossFactionAffinity.forEach(({ total, count }, key) => {
+      const [factionA, factionB] = key.split('→')
+      const avgAffinity = total / count
+      const relType = avgAffinity > 0.2 ? 'ally' :
+                      avgAffinity < -0.2 ? 'enemy' :
+                      avgAffinity > 0 ? 'trading_partner' : 'rival'
+      const strength = Math.min(1, Math.abs(avgAffinity))
+
+      // Find factions and add relations
+      const fA = allFactions.find((f: any) => f.id === factionA)
+      const fB = allFactions.find((f: any) => f.id === factionB)
+      if (fA && !fA.relations.some((r: any) => r.target_id === factionB)) {
+        fA.relations.push({ target_id: factionB, stance: avgAffinity, label: relType, user_defined: false })
+      }
+      if (fB && !fB.relations.some((r: any) => r.target_id === factionA)) {
+        fB.relations.push({ target_id: factionA, stance: avgAffinity, label: relType, user_defined: false })
+      }
+
+      // Also write to organizations array
+      const orgs = (world as any).organizations ?? []
+      const oA = orgs.find((o: any) => o.id === factionA)
+      const oB = orgs.find((o: any) => o.id === factionB)
+      if (oA && !oA.relations?.some((r: any) => r.organization_id === factionB)) {
+        if (!oA.relations) oA.relations = []
+        oA.relations.push({ organization_id: factionB, type: relType, strength })
+      }
+      if (oB && !oB.relations?.some((r: any) => r.organization_id === factionA)) {
+        if (!oB.relations) oB.relations = []
+        oB.relations.push({ organization_id: factionA, type: relType, strength })
+      }
+    })
+    console.log(`  ✓ Inferred ${crossFactionAffinity.size} cross-faction relations from character bonds`)
 
     // Step 5: Record initialization event
     const agentNameList = world.agents.npcs.map(a => a.name)

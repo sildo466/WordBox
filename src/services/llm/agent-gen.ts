@@ -194,13 +194,17 @@ export async function generateFillerAgents(
 
   // 写入关系
   for (const bond of allBonds) {
-    const fromAgent = allAgents.find(a => a.id === bond.source)
+    const fromAgent = allAgents.find(a => a.id === bond.source || a.name === bond.source)
     if (fromAgent) {
-      fromAgent.relations[bond.target] = Math.max(-1, Math.min(1, bond.strength))
-      const toAgent = allAgents.find(a => a.id === bond.target)
+      // target 可能是 ID 也可能是名字
+      let targetId = bond.target
+      const toAgent = allAgents.find(a => a.id === targetId || a.name === targetId)
+      if (toAgent) targetId = toAgent.id
+
+      fromAgent.relations[targetId] = Math.max(-1, Math.min(1, bond.strength))
       if (toAgent) {
         fromAgent.short_term.push({
-          id: `bond-${bond.source}-${bond.target}`,
+          id: `bond-${fromAgent.id}-${targetId}`,
           content: `与${toAgent.name}的关系：${bond.description}`,
           importance: 0.65,
           emotional_weight: Math.abs(bond.strength) * 0.4,
@@ -351,10 +355,15 @@ stability（情绪稳定性）、agency（主动性）、empathy（共情力）�
 
   if (!bp?.id || !bp?.name) throw new Error('LLM 返回的角色蓝图缺少 id 或 name')
 
-  const base = createCharacter(bp.id)
+  // 使用 spec.id 和 spec.name — LLM 可能忽略指令生成自己的 ID/名字
+  const agentId = spec.id
+  const agentName = spec.name
+  const llmId = bp.id // 保留 LLM 的 ID，用于映射 bond 源
+
+  const base = createCharacter(agentId)
   const agent: SimAgent = {
     ...base,
-    name: bp.name,
+    name: agentName,
     // personality_params (0-100) → traits (0-1)
     traits: bp.personality_params ? {
       openness: (bp.personality_params.openness ?? 50) / 100,
@@ -395,13 +404,19 @@ stability（情绪稳定性）、agency（主动性）、empathy（共情力）�
     },
   } as SimAgent & { _sim_attrs: Record<string, any> }
 
-  // 写入关系
+  // 写入关系 — bond.source 可能是 spec.id 或 llmId（LLM 自己生成的 ID）
   for (const bond of bonds) {
-    if (bond.source === agent.id) {
-      agent.relations[bond.target] = Math.max(-1, Math.min(1, bond.strength))
-      const targetName = existingAgents.find(a => a.id === bond.target)?.name || bond.target
+    if (bond.source === agent.id || bond.source === llmId) {
+      // bond.target 可能是已有 agent 的 spec ID，也可能是 LLM 自己生成的 ID
+      let targetId = bond.target
+      // 尝试通过名字匹配来修正 target ID
+      const existing = existingAgents.find(a => a.id === targetId || a.name === targetId)
+      if (existing) targetId = existing.id
+
+      agent.relations[targetId] = Math.max(-1, Math.min(1, bond.strength))
+      const targetName = existingAgents.find(a => a.id === targetId)?.name || targetId
       agent.short_term.push({
-        id: `bond-${bond.source}-${bond.target}`,
+        id: `bond-${agent.id}-${targetId}`,
         content: `与${targetName}的关系：${bond.description}`,
         importance: 0.65,
         emotional_weight: Math.abs(bond.strength) * 0.4,
