@@ -69,10 +69,10 @@ const CONFLICT_PREREQUISITES = {
 
 /** 经济系统 */
 const ECONOMY = {
-  base_output: 3,
+  base_output: 5,
   output_economic_factor: 0.015,
-  military_maintenance_factor: 0.025,
-  population_cost_factor: 0.008,
+  military_maintenance_factor: 0.015,
+  population_cost_factor: 0.005,
   surplus_to_growth_rate: 0.20,
   deficit_to_decline_rate: 0.12,
   military_decay_on_empty: 2.5,
@@ -152,7 +152,7 @@ const CHARACTER = {
   retainer_cost_per_unit: 0.05,
   living_cost_base: 0.5,
   living_cost_stress_factor: 0.002,
-  wealth_org_salary_factor: 0.001,
+  wealth_org_salary_factor: 0.005,
   wealth_no_org_decay: 0.3,
 
   // 社会

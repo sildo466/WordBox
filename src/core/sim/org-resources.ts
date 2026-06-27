@@ -63,8 +63,8 @@ const BASE_GENERATION: Record<ResourceType, number> = {
 }
 
 const UPKEEP_COSTS = {
-  military_per_unit: 0.3,    // 每点军事力量消耗金库
-  population_per_unit: 0.05, // 每点人口消耗粮食
+  military_per_unit: 0.15,   // 每点军事力量消耗金库
+  population_per_unit: 0.03, // 每点人口消耗粮食
   intelligence_base: 0.5,    // 情报基础维护
   territory_per_unit: 0.2,   // 每块领地消耗原材料
 }
